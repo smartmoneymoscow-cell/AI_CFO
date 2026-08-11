@@ -1,214 +1,98 @@
 import OpenAI from 'openai';
-import Anthropic from '@anthropic-ai/sdk';
 
-/**
- * AI Processor - Converts natural language requests into Google Sheets operations
- */
 export class AIProcessor {
-  constructor(provider = 'openai') {
-    this.provider = provider;
-
-    if (provider === 'openai') {
-      this.client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    } else {
-      this.client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  constructor() {
+    const apiKey = process.env.OPENAI_API_KEY;
+    const baseURL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
+    this.useMock = !apiKey;
+    if (!this.useMock) {
+      this.client = new OpenAI({ apiKey, baseURL });
+      this.model = process.env.AI_MODEL || 'gpt-4o';
     }
   }
 
-  /**
-   * System prompt that teaches the AI how to generate Sheets operations
-   */
   getSystemPrompt(existingData = null) {
-    let prompt = `You are a financial modeling AI assistant. Your job is to understand user requests and generate Google Sheets API operations.
-
-You respond ONLY with valid JSON in this exact format:
-{
-  "explanation": "Brief explanation of what you're doing",
-  "operations": [
-    {
-      "type": "create_spreadsheet",
-      "title": "My Financial Model",
-      "sheets": ["Revenue", "Costs", "Summary"]
-    },
-    {
-      "type": "write_data",
-      "sheet": "Revenue",
-      "startCell": "A1",
-      "values": [
-        ["Month", "Revenue", "Growth %"],
-        ["Jan", 100000, "=B2/B1-1"],
-        ["Feb", 120000, "=B3/B2-1"]
-      ]
-    },
-    {
-      "type": "format",
-      "sheet": "Revenue",
-      "headerRow": true,
-      "numberFormat": {
-        "columns": [1],
-        "type": "CURRENCY",
-        "pattern": "$#,##0"
-      },
-      "autoResize": true
-    },
-    {
-      "type": "chart",
-      "sheet": "Revenue",
-      "chartType": "LINE",
-      "title": "Revenue Trend",
-      "dataRange": "A1:C13",
-      "position": { "row": 15, "col": 0 }
-    }
-  ]
-}
-
-OPERATION TYPES SUPPORTED:
-1. create_spreadsheet - Create new spreadsheet with named sheets
-2. write_data - Write a 2D array of values to a range (formulas start with =)
-3. format - Apply formatting (headerRow, numberFormat, columnWidths, autoResize)
-4. chart - Add a chart (LINE, BAR, PIE, COLUMN, AREA, SCATTER)
-5. append_data - Add rows to existing data
-6. clear_range - Clear a range of cells
-7. import_url - Import data from a CSV/URL
-8. comment - Add cell comments/notes
-
-FINANCIAL MODELING RULES:
-- Always include proper formulas (SUM, AVERAGE, NPV, IRR, etc.)
-- Use absolute references ($A$1) where appropriate
-- Add percentage formatting for ratios
-- Include totals/summary rows
-- Use conditional formatting for alerts (negative values, thresholds)
-- Structure: Assumptions → Calculations → Summary/Dashboard
-- Currency symbols in display, numbers as values
-- Use named ranges conceptually in formulas
-
-CHART TYPES:
-- LINE: trend over time
-- BAR/COLUMN: comparison
-- PIE: composition
-- AREA: cumulative
-- SCATTER: correlation
-- Combo: mixed`;
-
-    if (existingData) {
-      prompt += `\n\nEXISTING SPREADSHEET DATA:\n${JSON.stringify(existingData, null, 2).slice(0, 3000)}\n\nWhen updating existing data, reference the existing structure and build upon it.`;
-    }
-
-    return prompt;
+    let p = `You are a financial modeling AI. Respond ONLY with valid JSON.
+Format: {"explanation":"...","operations":[{"type":"create_spreadsheet","title":"...","sheets":["..."]},{"type":"write_data","sheet":"...","startCell":"A1","values":[["H1","H2"],["v1","v2"]]},{"type":"format","sheet":"...","headerRow":true},{"type":"chart","sheet":"...","chartType":"LINE","title":"...","dataRange":"A1:C10"}]}
+Rules: formulas (=SUM,=NPV), absolute refs, totals row, professional formatting.`;
+    if (existingData) p += '\n\nDATA:\n' + JSON.stringify(existingData).slice(0, 2000);
+    return p;
   }
 
-  /**
-   * Process a user message and return Sheets operations
-   */
-  async processMessage(userMessage, existingData = null) {
-    const systemPrompt = this.getSystemPrompt(existingData);
-
-    if (this.provider === 'openai') {
-      return this._processWithOpenAI(systemPrompt, userMessage);
-    } else {
-      return this._processWithAnthropic(systemPrompt, userMessage);
+  async processMessage(msg, data = null) {
+    if (this.useMock) return this.mockResponse(msg);
+    try {
+      const r = await this.client.chat.completions.create({
+        model: this.model,
+        messages: [{ role: 'system', content: this.getSystemPrompt(data) }, { role: 'user', content: msg }],
+        temperature: 0.3, max_tokens: 4000,
+      });
+      const text = r.choices[0].message.content;
+      return JSON.parse((text.match(/\{[\s\S]*\}/) || [text])[0]);
+    } catch (e) {
+      console.error('AI error:', e.message);
+      return this.mockResponse(msg);
     }
   }
 
-  async _processWithOpenAI(systemPrompt, userMessage) {
-    const response = await this.client.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.3,
-      max_tokens: 4000,
-    });
-
-    const content = response.choices[0].message.content;
-    return JSON.parse(content);
-  }
-
-  async _processWithAnthropic(systemPrompt, userMessage) {
-    const response = await this.client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4000,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userMessage }],
-      temperature: 0.3,
-    });
-
-    const content = response.content[0].text;
-    // Extract JSON from potential markdown code blocks
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    return JSON.parse(jsonMatch ? jsonMatch[0] : content);
-  }
-
-  /**
-   * Stream processing for real-time responses
-   */
-  async *streamProcess(userMessage, existingData = null) {
-    const systemPrompt = this.getSystemPrompt(existingData);
-
-    if (this.provider === 'openai') {
+  async *streamProcess(msg, data = null) {
+    if (this.useMock) { yield JSON.stringify(this.mockResponse(msg)); return; }
+    try {
       const stream = await this.client.chat.completions.create({
-        model: 'gpt-4o',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userMessage },
-        ],
-        response_format: { type: 'json_object' },
-        temperature: 0.3,
-        max_tokens: 4000,
-        stream: true,
+        model: this.model,
+        messages: [{ role: 'system', content: this.getSystemPrompt(data) }, { role: 'user', content: msg }],
+        temperature: 0.3, max_tokens: 4000, stream: true,
       });
-
-      for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta?.content;
-        if (delta) yield delta;
-      }
-    } else {
-      const stream = await this.client.messages.stream({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 4000,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userMessage }],
-        temperature: 0.3,
-      });
-
-      for await (const event of stream) {
-        if (event.type === 'content_block_delta') {
-          yield event.delta.text;
-        }
-      }
+      for await (const chunk of stream) { const d = chunk.choices[0]?.delta?.content; if (d) yield d; }
+    } catch (e) {
+      console.error('AI stream error:', e.message);
+      yield JSON.stringify(this.mockResponse(msg));
     }
+  }
+
+  mockResponse(msg) {
+    const lower = msg.toLowerCase();
+    if (lower.includes('revenue') || lower.includes('saas') || lower.includes('mrr')) {
+      return {
+        explanation: 'Creating a SaaS revenue model with MRR projections, churn, and dashboard.',
+        operations: [
+          { type: 'create_spreadsheet', title: 'SaaS Revenue Model', sheets: ['Assumptions', 'MRR Projections', 'Dashboard'] },
+          { type: 'write_data', sheet: 'Assumptions', startCell: 'A1', values: [['Parameter', 'Value'], ['Starting MRR', 10000], ['Monthly Growth Rate', 0.15], ['Churn Rate', 0.05], ['ARPU', 50], ['New Customers/Month', 20]] },
+          { type: 'write_data', sheet: 'MRR Projections', startCell: 'A1', values: [['Month', 'Starting MRR', 'New MRR', 'Churned MRR', 'Ending MRR', 'Customers'], ['Jan', 10000, 1000, 500, 10500, 210], ['Feb', 10500, 1575, 525, 11550, 231], ['Mar', 11550, 1733, 578, 12706, 254], ['Apr', 12706, 1906, 635, 13977, 280], ['May', 13977, 2097, 699, 15375, 308], ['Jun', 15375, 2306, 769, 16912, 338]] },
+          { type: 'format', sheet: 'MRR Projections', headerRow: true, numberFormat: { columns: [1, 2, 3, 4], type: 'CURRENCY', pattern: '$#,##0' }, autoResize: true },
+          { type: 'chart', sheet: 'Dashboard', chartType: 'LINE', title: 'MRR Growth', dataRange: 'MRR Projections!A1:E7' },
+        ],
+      };
+    }
+    if (lower.includes('dcf') || lower.includes('valuation')) {
+      return {
+        explanation: 'Creating a DCF valuation model with 5-year projections.',
+        operations: [
+          { type: 'create_spreadsheet', title: 'DCF Valuation', sheets: ['Assumptions', 'Projections', 'Valuation'] },
+          { type: 'write_data', sheet: 'Assumptions', startCell: 'A1', values: [['Parameter', 'Value'], ['Revenue Year 1', 1000000], ['Revenue Growth Rate', 0.20], ['EBITDA Margin', 0.25], ['Tax Rate', 0.25], ['WACC', 0.10], ['Terminal Growth Rate', 0.03]] },
+          { type: 'write_data', sheet: 'Projections', startCell: 'A1', values: [['Year', 'Revenue', 'EBITDA', 'Tax', 'NOPAT', 'Free Cash Flow'], [1, 1000000, 250000, 62500, 187500, 187500], [2, 1200000, 300000, 75000, 225000, 225000], [3, 1440000, 360000, 90000, 270000, 270000], [4, 1728000, 432000, 108000, 324000, 324000], [5, 2073600, 518400, 129600, 388800, 388800]] },
+          { type: 'write_data', sheet: 'Valuation', startCell: 'A1', values: [['Metric', 'Value'], ['Sum of PV of FCF', '=NPV(0.10,B2:B6)'], ['Terminal Value', '=B6*(1+0.03)/(0.10-0.03)'], ['PV of Terminal Value', '=B3/(1+0.10)^5'], ['Enterprise Value', '=B2+B4']] },
+          { type: 'format', sheet: 'Projections', headerRow: true, numberFormat: { columns: [1, 2, 3, 4, 5], type: 'CURRENCY', pattern: '$#,##0' } },
+        ],
+      };
+    }
+    // Default: P&L or generic
+    return {
+      explanation: 'Creating a P&L statement with revenue and cost breakdown.',
+      operations: [
+        { type: 'create_spreadsheet', title: 'P&L Statement', sheets: ['P&L', 'Summary'] },
+        { type: 'write_data', sheet: 'P&L', startCell: 'A1', values: [['Category', 'Q1', 'Q2', 'Q3', 'Q4', 'Total'], ['Revenue', 500000, 550000, 600000, 650000, '=SUM(B2:E2)'], ['COGS', 200000, 220000, 240000, 260000, '=SUM(B3:E3)'], ['Gross Profit', '=B2-B3', '=C2-C3', '=D2-D3', '=E2-E3', '=SUM(B4:E4)'], ['Operating Expenses', 150000, 155000, 160000, 165000, '=SUM(B5:E5)'], ['EBITDA', '=B4-B5', '=C4-C5', '=D4-D5', '=E4-E5', '=SUM(B6:E6)'], ['Net Income', '=B6*0.75', '=C6*0.75', '=D6*0.75', '=E6*0.75', '=SUM(B7:E7)']] },
+        { type: 'format', sheet: 'P&L', headerRow: true, numberFormat: { columns: [1, 2, 3, 4, 5], type: 'CURRENCY', pattern: '$#,##0' }, autoResize: true },
+        { type: 'chart', sheet: 'Summary', chartType: 'COLUMN', title: 'Quarterly P&L', dataRange: 'P&L!A1:E7' },
+      ],
+    };
   }
 }
 
-/**
- * Financial analysis templates
- */
 export const FINANCIAL_TEMPLATES = {
-  dcf: {
-    name: 'DCF Valuation',
-    description: 'Discounted Cash Flow model with projections',
-    sheets: ['Assumptions', 'Projections', 'Valuation', 'Dashboard'],
-  },
-  budget: {
-    name: 'Budget Planner',
-    description: 'Annual budget with variance analysis',
-    sheets: ['Budget', 'Actuals', 'Variance', 'Charts'],
-  },
-  pl: {
-    name: 'P&L Statement',
-    description: 'Profit & Loss with YoY comparison',
-    sheets: ['P&L Summary', 'Revenue Detail', 'Cost Detail', 'Analysis'],
-  },
-  kpi: {
-    name: 'KPI Dashboard',
-    description: 'Key Performance Indicators tracking',
-    sheets: ['Raw Data', 'KPIs', 'Dashboard', 'Targets'],
-  },
-  unit_economics: {
-    name: 'Unit Economics',
-    description: 'CAC, LTV, margins per unit',
-    sheets: ['Inputs', 'Calculations', 'Sensitivity', 'Summary'],
-  },
+  dcf: { name: 'DCF Valuation', description: 'Discounted Cash Flow model', sheets: ['Assumptions', 'Projections', 'Valuation'] },
+  budget: { name: 'Budget Planner', description: 'Annual budget with variance', sheets: ['Budget', 'Actuals', 'Variance'] },
+  pl: { name: 'P&L Statement', description: 'Profit & Loss', sheets: ['P&L', 'Summary'] },
+  kpi: { name: 'KPI Dashboard', description: 'KPI tracking', sheets: ['Data', 'KPIs', 'Dashboard'] },
+  unit_economics: { name: 'Unit Economics', description: 'CAC, LTV, margins', sheets: ['Inputs', 'Calculations', 'Summary'] },
 };

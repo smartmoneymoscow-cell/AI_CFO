@@ -1,319 +1,139 @@
-import { google } from 'googleapis';
-
 /**
- * Google Sheets API service
- * Handles all spreadsheet operations: create, read, write, format, charts
+ * Google Sheets API service — pure REST, no googleapis dependency.
  */
 export class GoogleSheetsService {
   constructor(tokens) {
-    this.auth = new google.auth.OAuth2(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET,
-      process.env.GOOGLE_REDIRECT_URI
-    );
-    this.auth.setCredentials(tokens);
-    this.sheets = google.sheets({ version: 'v4', auth: this.auth });
-    this.drive = google.drive({ version: 'v3', auth: this.auth });
+    this.accessToken = tokens.access_token;
+    this.sheetsBase = 'https://sheets.googleapis.com/v4/spreadsheets';
+    this.driveBase = 'https://www.googleapis.com/drive/v3';
   }
 
-  /**
-   * Create a new spreadsheet
-   */
+  async _fetch(url, options = {}) {
+    const res = await fetch(url, {
+      ...options,
+      headers: {
+        'Authorization': `Bearer ${this.accessToken}`,
+        'Content-Type': 'application/json',
+        ...(options.headers || {}),
+      },
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Google API ${res.status}: ${body}`);
+    }
+    return res.json();
+  }
+
   async createSpreadsheet(title, sheetNames = ['Sheet1']) {
     const resource = {
       properties: { title },
       sheets: sheetNames.map((name, i) => ({
-        properties: {
-          title: name,
-          index: i,
-          sheetId: i,
-        },
+        properties: { title: name, index: i, sheetId: i },
       })),
     };
-
-    const res = await this.sheets.spreadsheets.create({
-      resource,
-      fields: 'spreadsheetId,spreadsheetUrl,properties',
+    const data = await this._fetch(`${this.sheetsBase}`, {
+      method: 'POST',
+      body: JSON.stringify(resource),
     });
-
-    return {
-      spreadsheetId: res.data.spreadsheetId,
-      spreadsheetUrl: res.data.spreadsheetUrl,
-      title: res.data.properties.title,
-    };
+    return { spreadsheetId: data.spreadsheetId, spreadsheetUrl: data.spreadsheetUrl, title: data.properties.title };
   }
 
-  /**
-   * Write data to a range
-   */
   async writeRange(spreadsheetId, range, values) {
-    const res = await this.sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range,
-      valueInputOption: 'USER_ENTERED',
-      resource: { values },
-    });
-
-    return {
-      updatedRows: res.data.updatedRows,
-      updatedColumns: res.data.updatedColumns,
-      updatedCells: res.data.updatedCells,
-    };
+    const data = await this._fetch(
+      `${this.sheetsBase}/${spreadsheetId}/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`,
+      { method: 'PUT', body: JSON.stringify({ values }) }
+    );
+    return { updatedRows: data.updatedRows, updatedColumns: data.updatedColumns, updatedCells: data.updatedCells };
   }
 
-  /**
-   * Append data to a sheet
-   */
   async appendData(spreadsheetId, range, values) {
-    const res = await this.sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range,
-      valueInputOption: 'USER_ENTERED',
-      insertDataOption: 'INSERT_ROWS',
-      resource: { values },
-    });
-
-    return {
-      updatedRows: res.data.updates?.updatedRows || 0,
-      updatedRange: res.data.updates?.updatedRange,
-    };
+    const data = await this._fetch(
+      `${this.sheetsBase}/${spreadsheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
+      { method: 'POST', body: JSON.stringify({ values }) }
+    );
+    return { updatedRows: data.updates?.updatedRows || 0, updatedRange: data.updates?.updatedRange };
   }
 
-  /**
-   * Read data from a range
-   */
   async readRange(spreadsheetId, range) {
-    const res = await this.sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range,
-    });
-
-    return res.data.values || [];
+    const data = await this._fetch(`${this.sheetsBase}/${spreadsheetId}/values/${encodeURIComponent(range)}`);
+    return data.values || [];
   }
 
-  /**
-   * Read all data from a spreadsheet
-   */
   async readAll(spreadsheetId) {
-    const meta = await this.sheets.spreadsheets.get({
-      spreadsheetId,
-      fields: 'sheets.properties',
-    });
-
+    const meta = await this._fetch(`${this.sheetsBase}/${spreadsheetId}?fields=sheets.properties`);
     const results = {};
-    for (const sheet of meta.data.sheets) {
+    for (const sheet of meta.sheets) {
       const title = sheet.properties.title;
       results[title] = await this.readRange(spreadsheetId, `'${title}'`);
     }
-
     return results;
   }
 
-  /**
-   * Batch update: formatting, merges, charts, etc.
-   */
   async batchUpdate(spreadsheetId, requests) {
-    const res = await this.sheets.spreadsheets.batchUpdate({
-      spreadsheetId,
-      resource: { requests },
+    return this._fetch(`${this.sheetsBase}/${spreadsheetId}:batchUpdate`, {
+      method: 'POST',
+      body: JSON.stringify({ requests }),
     });
-
-    return res.data;
   }
 
-  /**
-   * Apply common formatting operations
-   */
   async formatCells(spreadsheetId, sheetId, options) {
     const requests = [];
-
     if (options.headerRow) {
-      // Bold header row
       requests.push({
         repeatCell: {
-          range: {
-            sheetId,
-            startRowIndex: 0,
-            endRowIndex: 1,
-          },
-          cell: {
-            userEnteredFormat: {
-              textFormat: { bold: true, fontSize: 11 },
-              backgroundColor: { red: 0.2, green: 0.4, blue: 0.7 },
-              textFormat: { bold: true, foregroundColor: { red: 1, green: 1, blue: 1 } },
-            },
-          },
+          range: { sheetId, startRowIndex: 0, endRowIndex: 1 },
+          cell: { userEnteredFormat: { textFormat: { bold: true, foregroundColor: { red: 1, green: 1, blue: 1 } }, backgroundColor: { red: 0.2, green: 0.4, blue: 0.7 } } },
           fields: 'userEnteredFormat(textFormat,backgroundColor)',
         },
       });
     }
-
     if (options.numberFormat) {
-      // Apply number format to specified columns
       for (const col of options.numberFormat.columns) {
         requests.push({
           repeatCell: {
-            range: {
-              sheetId,
-              startRowIndex: options.numberFormat.startRow || 1,
-              startColumnIndex: col,
-              endColumnIndex: col + 1,
-            },
-            cell: {
-              userEnteredFormat: {
-                numberFormat: {
-                  type: options.numberFormat.type || 'NUMBER',
-                  pattern: options.numberFormat.pattern || '#,##0.00',
-                },
-              },
-            },
+            range: { sheetId, startRowIndex: options.numberFormat.startRow || 1, startColumnIndex: col, endColumnIndex: col + 1 },
+            cell: { userEnteredFormat: { numberFormat: { type: options.numberFormat.type || 'NUMBER', pattern: options.numberFormat.pattern || '#,##0.00' } } },
             fields: 'userEnteredFormat.numberFormat',
           },
         });
       }
     }
-
-    if (options.columnWidths) {
-      for (const [col, width] of Object.entries(options.columnWidths)) {
-        requests.push({
-          updateDimensionProperties: {
-            range: {
-              sheetId,
-              dimension: 'COLUMNS',
-              startIndex: parseInt(col),
-              endIndex: parseInt(col) + 1,
-            },
-            properties: { pixelSize: width },
-            fields: 'pixelSize',
-          },
-        });
-      }
-    }
-
     if (options.autoResize) {
-      requests.push({
-        autoResizeDimensions: {
-          dimensions: {
-            sheetId,
-            dimension: 'COLUMNS',
-            startIndex: 0,
-            endIndex: options.autoResize.endColumn || 20,
-          },
-        },
-      });
+      requests.push({ autoResizeDimensions: { dimensions: { sheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: options.autoResize.endColumn || 20 } } });
     }
-
-    if (requests.length > 0) {
-      return this.batchUpdate(spreadsheetId, requests);
-    }
+    if (requests.length) return this.batchUpdate(spreadsheetId, requests);
     return null;
   }
 
-  /**
-   * Create a chart in the spreadsheet
-   */
-  async createChart(spreadsheetId, sheetId, chartSpec) {
-    const chartRequest = {
-      addChart: {
-        chart: {
-          spec: chartSpec,
-          position: {
-            overlayPosition: {
-              anchorCell: {
-                sheetId,
-                rowIndex: chartSpec.anchorRow || 0,
-                columnIndex: chartSpec.anchorCol || 0,
-              },
-              widthPixels: chartSpec.width || 600,
-              heightPixels: chartSpec.height || 400,
-            },
-          },
-        },
-      },
-    };
-
-    return this.batchUpdate(spreadsheetId, [chartRequest]);
-  }
-
-  /**
-   * Publish spreadsheet (make it public via Drive)
-   */
-  async publishSpreadsheet(spreadsheetId) {
-    // Make it publicly viewable
-    await this.drive.permissions.create({
-      fileId: spreadsheetId,
-      resource: {
-        role: 'reader',
-        type: 'anyone',
-      },
-    });
-
-    // Get the published URL
-    const file = await this.drive.files.get({
-      fileId: spreadsheetId,
-      fields: 'webViewLink,webContentLink',
-    });
-
+  async getMetadata(spreadsheetId) {
+    const data = await this._fetch(`${this.sheetsBase}/${spreadsheetId}?fields=properties,sheets.properties`);
     return {
-      viewLink: file.data.webViewLink,
-      downloadLink: file.data.webContentLink,
-      spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${spreadsheetId}`,
+      title: data.properties.title,
+      sheets: data.sheets.map(s => ({ id: s.properties.sheetId, title: s.properties.title, index: s.properties.index, rowCount: s.properties.gridProperties?.rowCount, columnCount: s.properties.gridProperties?.columnCount })),
     };
   }
 
-  /**
-   * Share with specific users
-   */
+  async publishSpreadsheet(spreadsheetId) {
+    await fetch(`${this.driveBase}/files/${spreadsheetId}/permissions`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${this.accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'reader', type: 'anyone' }),
+    });
+    const file = await this._fetch(`${this.driveBase}/files/${spreadsheetId}?fields=webViewLink`);
+    return { viewLink: file.webViewLink, spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${spreadsheetId}` };
+  }
+
   async shareWithUsers(spreadsheetId, emails, role = 'reader') {
     const results = [];
     for (const email of emails) {
-      const res = await this.drive.permissions.create({
-        fileId: spreadsheetId,
-        sendNotificationEmail: true,
-        resource: {
-          role,
-          type: 'user',
-          emailAddress: email,
-        },
+      const res = await fetch(`${this.driveBase}/files/${spreadsheetId}/permissions?sendNotificationEmail=true`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${this.accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role, type: 'user', emailAddress: email }),
       });
-      results.push({ email, permissionId: res.data.id });
+      const data = await res.json();
+      results.push({ email, permissionId: data.id });
     }
     return results;
-  }
-
-  /**
-   * Get spreadsheet metadata
-   */
-  async getMetadata(spreadsheetId) {
-    const res = await this.sheets.spreadsheets.get({
-      spreadsheetId,
-      fields: 'properties,sheets.properties',
-    });
-
-    return {
-      title: res.data.properties.title,
-      sheets: res.data.sheets.map((s) => ({
-        id: s.properties.sheetId,
-        title: s.properties.title,
-        index: s.properties.index,
-        rowCount: s.properties.gridProperties?.rowCount,
-        columnCount: s.properties.gridProperties?.columnCount,
-      })),
-    };
-  }
-
-  /**
-   * Import data from a URL (CSV, etc.)
-   */
-  async importFromUrl(spreadsheetId, url, sheetName = 'Imported') {
-    // Fetch the URL content
-    const response = await fetch(url);
-    const text = await response.text();
-
-    // Parse CSV-like content
-    const rows = text.split('\n').map((row) => row.split(',').map((cell) => cell.trim()));
-
-    // Write to the spreadsheet
-    return this.appendData(spreadsheetId, `'${sheetName}'!A1`, rows);
   }
 }
