@@ -1,14 +1,22 @@
 import { Router } from 'express';
 import { GoogleSheetsService } from '../services/googleSheets.js';
+import { getTokenByUserId } from '../services/googleAuth.js';
 
 export const sheetsRouter = Router();
 
-// Middleware: require auth
+// Middleware: require auth — loads token record from persistent store
 function requireAuth(req, res, next) {
-  if (!req.session?.googleTokens) {
+  const userId = req.session?.userId;
+  if (!userId) {
     return res.status(401).json({ error: 'Not authenticated with Google' });
   }
-  req.sheetsService = new GoogleSheetsService(req.session.googleTokens);
+
+  const tokenRecord = getTokenByUserId(userId);
+  if (!tokenRecord) {
+    return res.status(401).json({ error: 'Google tokens not found — please re-authenticate' });
+  }
+
+  req.sheetsService = new GoogleSheetsService(tokenRecord);
   next();
 }
 
@@ -21,7 +29,6 @@ sheetsRouter.post('/create', requireAuth, async (req, res) => {
       sheets || ['Sheet1']
     );
 
-    // Store the spreadsheet ID in session for later reference
     if (!req.session.spreadsheets) req.session.spreadsheets = [];
     req.session.spreadsheets.push(result.spreadsheetId);
 
@@ -36,11 +43,7 @@ sheetsRouter.post('/create', requireAuth, async (req, res) => {
 sheetsRouter.post('/:id/write', requireAuth, async (req, res) => {
   try {
     const { range, values } = req.body;
-    const result = await req.sheetsService.writeRange(
-      req.params.id,
-      range,
-      values
-    );
+    const result = await req.sheetsService.writeRange(req.params.id, range, values);
     res.json(result);
   } catch (err) {
     console.error('Write error:', err);
@@ -98,11 +101,7 @@ sheetsRouter.post('/:id/batch-update', requireAuth, async (req, res) => {
 sheetsRouter.post('/:id/format', requireAuth, async (req, res) => {
   try {
     const { sheetId, options } = req.body;
-    const result = await req.sheetsService.formatCells(
-      req.params.id,
-      sheetId,
-      options
-    );
+    const result = await req.sheetsService.formatCells(req.params.id, sheetId, options);
     res.json(result);
   } catch (err) {
     console.error('Format error:', err);
@@ -114,11 +113,7 @@ sheetsRouter.post('/:id/format', requireAuth, async (req, res) => {
 sheetsRouter.post('/:id/chart', requireAuth, async (req, res) => {
   try {
     const { sheetId, chartSpec } = req.body;
-    const result = await req.sheetsService.createChart(
-      req.params.id,
-      sheetId,
-      chartSpec
-    );
+    const result = await req.sheetsService.createChart(req.params.id, sheetId, chartSpec);
     res.json(result);
   } catch (err) {
     console.error('Chart error:', err);
@@ -141,11 +136,7 @@ sheetsRouter.post('/:id/publish', requireAuth, async (req, res) => {
 sheetsRouter.post('/:id/share', requireAuth, async (req, res) => {
   try {
     const { emails, role } = req.body;
-    const result = await req.sheetsService.shareWithUsers(
-      req.params.id,
-      emails,
-      role
-    );
+    const result = await req.sheetsService.shareWithUsers(req.params.id, emails, role);
     res.json(result);
   } catch (err) {
     console.error('Share error:', err);
@@ -157,11 +148,8 @@ sheetsRouter.post('/:id/share', requireAuth, async (req, res) => {
 sheetsRouter.post('/:id/import', requireAuth, async (req, res) => {
   try {
     const { url, sheetName } = req.body;
-    const result = await req.sheetsService.importFromUrl(
-      req.params.id,
-      url,
-      sheetName
-    );
+    if (!url) return res.status(400).json({ error: 'url is required' });
+    const result = await req.sheetsService.importFromUrl(req.params.id, url, sheetName);
     res.json(result);
   } catch (err) {
     console.error('Import error:', err);

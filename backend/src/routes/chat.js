@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { AIProcessor, FINANCIAL_TEMPLATES } from '../services/aiProcessor.js';
 import { GoogleSheetsService } from '../services/googleSheets.js';
+import { getTokenByUserId } from '../services/googleAuth.js';
 
 export const chatRouter = Router();
 
@@ -58,9 +59,10 @@ chatRouter.post('/send', async (req, res) => {
   try {
     // If there's a document URL, fetch its data
     let existingData = null;
-    if (spreadsheetId && req.session?.googleTokens) {
+    const _tokenRec = req.session?.userId ? getTokenByUserId(req.session.userId) : null;
+    if (spreadsheetId && _tokenRec) {
       try {
-        const sheetsService = new GoogleSheetsService(req.session.googleTokens);
+        const sheetsService = new GoogleSheetsService(_tokenRec);
         existingData = await sheetsService.readAll(spreadsheetId);
       } catch (e) {
         sendEvent({ type: 'info', message: 'Could not read existing spreadsheet data' });
@@ -99,8 +101,9 @@ chatRouter.post('/send', async (req, res) => {
     sendEvent({ type: 'status', message: '📊 Executing operations...' });
 
     // Execute operations if user has Google tokens
-    if (req.session?.googleTokens) {
-      const sheetsService = new GoogleSheetsService(req.session.googleTokens);
+    const _tokenRec2 = req.session?.userId ? getTokenByUserId(req.session.userId) : null;
+    if (_tokenRec2) {
+      const sheetsService = new GoogleSheetsService(_tokenRec2);
       let currentSpreadsheetId = spreadsheetId;
 
       for (const op of operations.operations || []) {
@@ -283,7 +286,8 @@ chatRouter.post('/template/:key', async (req, res) => {
     res.write(`data: ${JSON.stringify(event)}\n\n`);
   };
 
-  if (!req.session?.googleTokens) {
+  const _tmplTokenRec = req.session?.userId ? getTokenByUserId(req.session.userId) : null;
+  if (!_tmplTokenRec) {
     sendEvent({
       type: 'error',
       message: 'Connect Google account first',
@@ -293,7 +297,7 @@ chatRouter.post('/template/:key', async (req, res) => {
   }
 
   try {
-    const sheetsService = new GoogleSheetsService(req.session.googleTokens);
+    const sheetsService = new GoogleSheetsService(_tmplTokenRec);
 
     sendEvent({ type: 'status', message: `Creating ${template.name}...` });
 
