@@ -230,6 +230,23 @@ NODE_ENV=production node src/server.js
 - `NODE_ENV=production` — Enables secure cookies
 - `SESSION_SECRET` — Strong random string
 
+**HTTPS Setup (required for production):**
+
+GitHub Pages serves over HTTPS. Browsers block mixed content (HTTPS page → HTTP API), so the backend must also use HTTPS.
+
+```bash
+# Generate self-signed certificate (for testing)
+openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes \
+  -subj '/CN=47.236.80.116'
+
+# Add to .env
+NODE_ENV=production
+SSL_CERT=./cert.pem
+SSL_KEY=./key.pem
+```
+
+For production, use a proper SSL certificate (Let's Encrypt / Cloudflare).
+
 ## Changelog
 
 ### 2026-08-12
@@ -239,20 +256,22 @@ NODE_ENV=production node src/server.js
 - 🔧 **Chat messaging** — `sendMessage` and `handleUseTemplate` both correctly route to the backend server
 - 🔧 **CORS** — Backend accepts requests from GitHub Pages origin
 - 🔧 **Session cookies** — Configured for cross-origin (`SameSite=None; Secure`) in production
+- 🔧 **Mixed Content** — Added HTTPS support to backend (required when frontend is on GitHub Pages)
 
 **Changed:**
 - ✨ **URL input removed** — Paste Google Sheets links directly in chat; backend auto-detects and loads spreadsheet data
 - ✨ **Smart URL parsing** — Backend extracts `docs.google.com/spreadsheets` URLs from message text and reads data automatically
-- 📝 **Environment config** — Added `VITE_API_BASE`, `COOKIE_DOMAIN`, `NODE_ENV` to environment docs
+- 🔒 **HTTPS backend** — Supports SSL certificates via `SSL_CERT`/`SSL_KEY` env vars
+- 📝 **Environment config** — Added `VITE_API_BASE`, `COOKIE_DOMAIN`, `NODE_ENV`, `SSL_CERT`, `SSL_KEY` to environment docs
 
 **Files changed:**
 - `frontend/src/services/api.js` — `API_BASE` via `VITE_API_BASE`, WebSocket URL
 - `frontend/src/App.jsx` — `handleSendMessage` simplified, `handleUseTemplate` uses `API_BASE`
 - `frontend/src/components/ChatPanel.jsx` — Removed URL input field and Link button
-- `frontend/.env.production` — New: `VITE_API_BASE`
+- `frontend/.env.production` — New: `VITE_API_BASE` (HTTPS)
 - `backend/src/routes/chat.js` — URL extraction from message text
-- `backend/src/server.js` — CORS origin function, cookie domain support
-- `backend/.env.example` — `COOKIE_DOMAIN`, `NODE_ENV` docs
+- `backend/src/server.js` — HTTPS support, CORS origin function, cookie domain
+- `backend/.env.example` — `COOKIE_DOMAIN`, `NODE_ENV`, `SSL_CERT`, `SSL_KEY` docs
 - `.github/workflows/deploy-pages.yml` — `VITE_API_BASE` env during build
 
 ## License

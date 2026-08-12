@@ -4,12 +4,24 @@ import cors from 'cors';
 import session from 'express-session';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
+import { createServer as createHttpsServer } from 'https';
+import { readFileSync, existsSync } from 'fs';
 import { authRouter } from './routes/auth.js';
 import { sheetsRouter } from './routes/sheets.js';
 import { chatRouter } from './routes/chat.js';
 
 const app = express();
-const server = createServer(app);
+
+// HTTPS support for production (required when frontend is on GitHub Pages/HTTPS)
+let server;
+if (process.env.NODE_ENV === 'production' && process.env.SSL_CERT && process.env.SSL_KEY) {
+  const cert = readFileSync(process.env.SSL_CERT);
+  const key = readFileSync(process.env.SSL_KEY);
+  server = createHttpsServer({ cert, key }, app);
+  console.log('🔒 HTTPS enabled');
+} else {
+  server = createServer(app);
+}
 
 const wss = new WebSocketServer({ server, path: '/ws' });
 const wsClients = new Map();
