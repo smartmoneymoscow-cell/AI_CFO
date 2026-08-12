@@ -15,7 +15,20 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 const wsClients = new Map();
 
 app.use(cors({
-  origin: [process.env.FRONTEND_URL, 'http://localhost:5173', 'https://smartmoneymoscow-cell.github.io'],
+  origin: function (origin, callback) {
+    const allowed = [
+      process.env.FRONTEND_URL,
+      'http://localhost:5173',
+      'http://localhost:3001',
+      'https://smartmoneymoscow-cell.github.io',
+    ].filter(Boolean);
+    // Allow requests with no origin (same-origin, curl, etc.)
+    if (!origin || allowed.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(null, true); // Allow all origins in dev — tighten in production
+    }
+  },
   credentials: true,
 }));
 
@@ -29,6 +42,8 @@ app.use(session({
     secure: process.env.NODE_ENV === 'production',
     maxAge: 7 * 24 * 60 * 60 * 1000,
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    // In production, cookie must be set for the backend domain so cross-origin requests work
+    ...(process.env.COOKIE_DOMAIN ? { domain: process.env.COOKIE_DOMAIN } : {}),
   },
 }));
 

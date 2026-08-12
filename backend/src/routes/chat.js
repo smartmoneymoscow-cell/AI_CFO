@@ -32,7 +32,7 @@ function broadcastToSession(req, event) {
 
 // Stream chat response with real-time Sheets operations
 chatRouter.post('/send', async (req, res) => {
-  const { message, spreadsheetId, documentUrl } = req.body;
+  const { message, spreadsheetId } = req.body;
   const sessionId = getSessionId(req);
   const conversation = getConversation(sessionId);
 
@@ -57,7 +57,13 @@ chatRouter.post('/send', async (req, res) => {
   };
 
   try {
-    // If there's a document URL, fetch its data
+    // Extract any URLs from the message text
+    const urlRegex = /https?:\/\/[^\s]+/g;
+    const foundUrls = message.match(urlRegex) || [];
+    const sheetsUrl = foundUrls.find(u => u.includes('docs.google.com/spreadsheets'));
+    const otherUrls = foundUrls.filter(u => !u.includes('docs.google.com/spreadsheets'));
+
+    // If there's a spreadsheet URL in the message, try to read its data
     let existingData = null;
     const _tokenRec = req.session?.userId ? getTokenByUserId(req.session.userId) : null;
     if (spreadsheetId && _tokenRec) {
@@ -67,6 +73,24 @@ chatRouter.post('/send', async (req, res) => {
       } catch (e) {
         sendEvent({ type: 'info', message: 'Could not read existing spreadsheet data' });
       }
+    } else if (sheetsUrl && _tokenRec) {
+      // Extract spreadsheet ID from URL and read it
+      const idMatch = sheetsUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+      if (idMatch) {
+        try {
+          const sheetsService = new GoogleSheetsService(_tokenRec);
+          existingData = await sheetsService.readAll(idMatch[1]);
+          sendEvent({ type: 'info', message: '📎 Loaded data from linked spreadsheet' });
+        } catch (e) {
+          sendEvent({ type: 'info', message: 'Could not read linked spreadsheet — check sharing permissions' });
+        }
+      }
+    }
+
+    // Build prompt — include any non-sheets URLs as reference
+    let prompt = message;
+    if (otherUrls.length > 0) {
+      prompt += `\n\nReference document(s): ${otherUrls.join(', ')}`;
     }
 
     // Process with AI
@@ -76,10 +100,7 @@ chatRouter.post('/send', async (req, res) => {
     sendEvent({ type: 'status', message: '🤔 Thinking...' });
 
     // Collect streamed response
-    for await (const chunk of ai.streamProcess(
-      message + (documentUrl ? `\n\nReference document: ${documentUrl}` : ''),
-      existingData
-    )) {
+    for await (const chunk of ai.streamProcess(prompt, existingData)) {
       fullResponse += chunk;
       sendEvent({ type: 'stream', content: chunk });
     }

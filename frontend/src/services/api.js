@@ -1,5 +1,5 @@
 // API base: in dev proxied by Vite, in production point to backend server
-const API_BASE = import.meta.env.DEV ? '' : 'http://47.236.80.116:3001';
+const API_BASE = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_BASE || 'http://47.236.80.116:3001');
 
 class ApiService {
   constructor() {
@@ -24,12 +24,12 @@ class ApiService {
     await fetch(`${API_BASE}/auth/logout`, { method: 'POST', credentials: 'include' });
   }
 
-  async sendMessage({ message, spreadsheetId, documentUrl, onEvent }) {
+  async sendMessage({ message, spreadsheetId, onEvent }) {
     const res = await fetch(`${API_BASE}/api/chat/send`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ message, spreadsheetId, documentUrl }),
+      body: JSON.stringify({ message, spreadsheetId }),
     });
     if (!res.ok) throw new Error(`Chat error: ${res.status}`);
 
@@ -96,7 +96,7 @@ class ApiService {
     this.sessionId = sessionId;
     const wsBase = import.meta.env.DEV
       ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
-      : 'ws://47.236.80.116:3001';
+      : (import.meta.env.VITE_API_BASE || 'http://47.236.80.116:3001').replace(/^http/, 'ws');
     try {
       this.ws = new WebSocket(`${wsBase}/ws?sessionId=${sessionId}`);
       this.ws.onmessage = (e) => {

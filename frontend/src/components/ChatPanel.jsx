@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Link, Loader2 } from 'lucide-react';
+import { Send, Loader2 } from 'lucide-react';
 
 export function ChatPanel({
   messages,
@@ -10,8 +10,6 @@ export function ChatPanel({
   user,
 }) {
   const [input, setInput] = useState('');
-  const [showUrlInput, setShowUrlInput] = useState(false);
-  const [documentUrl, setDocumentUrl] = useState('');
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -21,10 +19,8 @@ export function ChatPanel({
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!input.trim() || isProcessing) return;
-    onSendMessage(input, documentUrl || undefined);
+    onSendMessage(input);
     setInput('');
-    setDocumentUrl('');
-    setShowUrlInput(false);
   };
 
   const handleKeyDown = (e) => {
@@ -80,36 +76,7 @@ export function ChatPanel({
 
       {/* Input area — fixed at bottom, NEVER hidden */}
       <div className="shrink-0 border-t border-surface-2 bg-surface-0 p-3">
-        {showUrlInput && (
-          <div className="mb-2 flex gap-2">
-            <input
-              type="url"
-              value={documentUrl}
-              onChange={(e) => setDocumentUrl(e.target.value)}
-              placeholder="Paste Google Sheets URL..."
-              className="flex-1 text-xs px-3 py-2 rounded-md border border-surface-3 bg-surface-1 focus:outline-none focus:ring-2 focus:ring-brand-200 focus:border-brand-400"
-            />
-            <button
-              onClick={() => { setShowUrlInput(false); setDocumentUrl(''); }}
-              className="text-xs text-dark-3 hover:text-dark-0 px-2"
-            >✕</button>
-          </div>
-        )}
-
         <form onSubmit={handleSubmit} className="flex gap-2 items-end">
-          <button
-            type="button"
-            onClick={() => setShowUrlInput(!showUrlInput)}
-            className={`p-2.5 rounded-md transition-colors shrink-0 self-end ${
-              showUrlInput
-                ? 'bg-brand-50 text-brand-600'
-                : 'text-dark-3 hover:text-dark-2 hover:bg-surface-1'
-            }`}
-            title="Attach document URL"
-          >
-            <Link size={16} />
-          </button>
-
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}

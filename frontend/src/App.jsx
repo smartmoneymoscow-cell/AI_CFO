@@ -73,7 +73,7 @@ export default function App() {
 
   // ── Handlers ────────────────────────────────────────
   const handleSendMessage = useCallback(
-    async (message, documentUrl) => {
+    async (message) => {
       if (!message.trim() || isProcessing) return;
       setMessages((prev) => [...prev, { role: 'user', content: message }]);
       setIsProcessing(true);
@@ -85,7 +85,6 @@ export default function App() {
         await api.sendMessage({
           message,
           spreadsheetId: currentSpreadsheetId,
-          documentUrl,
           onEvent: (event) => {
             switch (event.type) {
               case 'stream':
@@ -198,7 +197,8 @@ export default function App() {
     ]);
 
     try {
-      const response = await fetch(`/api/chat/template/${templateKey}`, {
+      const templateBase = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_BASE || 'http://47.236.80.116:3001');
+      const response = await fetch(`${templateBase}/api/chat/template/${templateKey}`, {
         method: 'POST',
         credentials: 'include',
       });
